@@ -421,16 +421,17 @@ async function processSabanas(){
   log(`Procesando ${files.length} sábana(s)...`,'info');
   for(let fi=0;fi<files.length;fi++){
     const file=files[fi];const ab=await file.arrayBuffer();
+    const fileBytes=new Uint8Array(ab);
     const periodo=extractPeriod(file.name),prefijo=detectPrefix(file.name);
     log(`\n=== Sábana: ${file.name} ===`);log(`   Prefijo: ${prefijo} | Período: ${periodo}`,'info');
-    let doc;try{doc=await pdfjsLib.getDocument({data:new Uint8Array(ab)}).promise}catch(e){log(`❌ Error: ${e.message}`,'error');continue}
+    let doc;try{doc=await pdfjsLib.getDocument({data:fileBytes.slice()}).promise}catch(e){log(`❌ Error: ${e.message}`,'error');continue}
     const np=doc.numPages;log(`   Páginas: ${np}`);
     const cuils=[];
     for(let p=1;p<=np;p++){const pg=await doc.getPage(p);const tc=await pg.getTextContent();cuils.push(extractCuilFromText(tc.items.map(i=>i.str).join(' ')))}
     const blocks=[];let cc=cuils[0],bs=0;
     for(let i=1;i<cuils.length;i++){if(cuils[i]!==cc){blocks.push({cuil:cc,s:bs,e:i-1});cc=cuils[i];bs=i}}
     blocks.push({cuil:cc,s:bs,e:np-1});
-    const src=await PDFDocument.load(ab);
+    const src=await PDFDocument.load(fileBytes.slice().buffer);
     for(const bl of blocks){
       if(!bl.cuil){log(`   ⚠️ Sin CUIL (págs ${bl.s+1}-${bl.e+1}), omitido.`,'warn');continue}
       const dni=cuilToDni(bl.cuil),pc=bl.e-bl.s+1,fn=`${prefijo}_${periodo}_${dni}.pdf`;
@@ -454,8 +455,9 @@ async function processSueltos(){
     const dni=extractDniFromFilename(f.name);
     if(!dni){log(`⚠️ Sin DNI: ${f.name}, omitido.`,'warn');sk++;continue}
     const ab=await f.arrayBuffer();
-    let np=1;try{np=(await pdfjsLib.getDocument({data:new Uint8Array(ab)}).promise).numPages}catch(e){}
-    allRecibos.push({dni,fileName:f.name,pdfBytes:new Uint8Array(ab),pages:np});
+    const bytes=new Uint8Array(ab);
+    let np=1;try{np=(await pdfjsLib.getDocument({data:bytes.slice()}).promise).numPages}catch(e){}
+    allRecibos.push({dni,fileName:f.name,pdfBytes:bytes,pages:np});
     if((i+1)%200===0||i===uploadedFiles.length-1)log(`   Leídos: ${allRecibos.length}/${uploadedFiles.length-sk}`,'info');
     setProgress(((i+1)/uploadedFiles.length)*50);
   }
@@ -515,7 +517,7 @@ async function renderSigPreview(){
   const file=uploadedFiles[0];
   try{
     const ab=await file.arrayBuffer();
-    sigPdfDoc=await pdfjsLib.getDocument({data:new Uint8Array(ab)}).promise;
+    sigPdfDoc=await pdfjsLib.getDocument({data:new Uint8Array(ab).slice()}).promise;
     sigTotalPages=sigPdfDoc.numPages;
     sigCurrentPage=0;
     document.getElementById('sigNoFile').classList.add('hidden');
