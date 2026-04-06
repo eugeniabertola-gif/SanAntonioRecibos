@@ -1,22 +1,21 @@
 const https = require('https');
 const { URL } = require('url');
 
-// Vercel serverless functions have a 4.5MB body limit on hobby plan.
-// For large files, consider upgrading or chunking.
 module.exports = async function handler(req, res) {
-  // Only POST
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' });
-    return;
-  }
-
-  // CORS headers for the frontend
+  // CORS headers FIRST — must be present before any early return
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
+  // Handle preflight
   if (req.method === 'OPTIONS') {
     res.status(200).end();
+    return;
+  }
+
+  // Only POST after preflight is handled
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
     return;
   }
 
@@ -26,24 +25,47 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  // Read the raw body as a buffer
-  const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(chunk);
-  }
-  const bodyBuffer = Buffer.concat(chunks);
-
-  // Get the userId (DNI) from query param
   const userId = req.query.userId;
   if (!userId) {
     res.status(400).json({ error: 'Missing userId query parameter' });
     return;
   }
 
+  // Read the raw body — handle both Vercel runtime styles:
+  // 1. req.body already a Buffer (newer runtimes with bodyParser:false)
+  // 2. req is a readable stream (older runtimes)
+  let bodyBuffer;
+  if (req.body && Buffer.isBuffer(req.body)) {
+    bodyBuffer = req.body;
+  } else if (req.body && typeof req.body === 'string') {
+    bodyBuffer = Buffer.from(req.body);
+  } else {
+    try {
+      const chunks = [];
+      await new Promise((resolve, reject) => {
+        req.on('data', (chunk) => chunks.push(chunk));
+        req.on('end', resolve);
+        req.on('error', reject);
+        setTimeout(() => {
+          if (chunks.length === 0) reject(new Error('Body read timeout'));
+          else resolve();
+        }, 10000);
+      });
+      bodyBuffer = Buffer.concat(chunks);
+    } catch (e) {
+      res.status(400).json({ error: 'Could not read request body', details: e.message });
+      return;
+    }
+  }
+
+  if (!bodyBuffer || bodyBuffer.length === 0) {
+    res.status(400).json({ error: 'Empty request body' });
+    return;
+  }
+
   const targetUrl = `https://api-prod.humand.co/public/api/v1/users/${userId}/documents/files`;
   const parsedUrl = new URL(targetUrl);
 
-  // Forward the request with the same content-type (multipart/form-data)
   const options = {
     hostname: parsedUrl.hostname,
     path: parsedUrl.pathname,
@@ -77,7 +99,6 @@ module.exports = async function handler(req, res) {
   });
 };
 
-// Disable Vercel's body parser so we get the raw multipart stream
 module.exports.config = {
   api: {
     bodyParser: false,
